@@ -1,6 +1,7 @@
 package confx
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -9,10 +10,10 @@ import (
 )
 
 type testConfig struct {
-	Name    string   `toml:"name"`
-	Port    *int     `toml:"port"`
-	Enabled *bool    `toml:"enabled"`
-	Tags    []string `toml:"tags"`
+	Name    string   `toml:"name" json:"name" yaml:"name" ini:"name"`
+	Port    *int     `toml:"port" json:"port" yaml:"port" ini:"port"`
+	Enabled *bool    `toml:"enabled" json:"enabled" yaml:"enabled" ini:"enabled"`
+	Tags    []string `toml:"tags" json:"tags" yaml:"tags" ini:"tags"`
 }
 
 func writeFile(t *testing.T, path, data string) {
@@ -128,7 +129,7 @@ func TestDecodeErrorsIncludeSource(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := decode[testConfig]([]byte(tt.data), tt.source)
+			_, err := Decode[testConfig]([]byte(tt.data), tt.source)
 			if err == nil {
 				t.Fatal("Decode returned nil error")
 			}
@@ -191,8 +192,8 @@ func TestReadErrorsIncludeEmptyPath(t *testing.T) {
 			if !strings.Contains(err.Error(), "read "+strconv.Quote(tt.path)) {
 				t.Fatalf("error = %q, want read path", err)
 			}
-			if !strings.Contains(err.Error(), "invalid path: empty") {
-				t.Fatalf("error = %q, want empty path reason", err)
+			if !errors.Is(err, ErrEmptyPath) {
+				t.Fatalf("error = %q, want ErrEmptyPath", err)
 			}
 		})
 	}
@@ -226,7 +227,7 @@ enabled = true
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := decode[testConfig]([]byte(tt.toml), tt.name+".toml")
+			got, err := Decode[testConfig]([]byte(tt.toml), tt.name+".toml")
 			if err != nil {
 				t.Fatalf("Decode returned error: %v", err)
 			}
@@ -251,7 +252,7 @@ func TestSliceFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := decode[testConfig]([]byte(tt.toml), tt.name+".toml")
+			got, err := Decode[testConfig]([]byte(tt.toml), tt.name+".toml")
 			if err != nil {
 				t.Fatalf("Decode returned error: %v", err)
 			}
@@ -282,12 +283,213 @@ tags = ["memory"]
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := decode[testConfig](tt.data, tt.name+".toml")
+			got, err := Decode[testConfig](tt.data, tt.name+".toml")
 			if err != nil {
 				t.Fatalf("Decode returned error: %v", err)
 			}
 
 			assertConfig(t, got, tt.want)
+		})
+	}
+}
+
+func TestLoadFileJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	writeFile(t, path, `{
+  "name": "example",
+  "port": 8080,
+  "enabled": true,
+  "tags": ["api", "worker"]
+}`)
+
+	got, err := LoadFile[testConfig](path)
+	if err != nil {
+		t.Fatalf("LoadFile returned error: %v", err)
+	}
+
+	assertConfig(t, got, testConfig{
+		Name:    "example",
+		Port:    ptr(8080),
+		Enabled: ptr(true),
+		Tags:    []string{"api", "worker"},
+	})
+}
+
+func TestLoadFileJSONC(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.jsonc")
+	writeFile(t, path, `{
+  // app settings
+  "name": "example",
+  "port": 8080,
+  "enabled": true,
+  "tags": ["api", "worker",], /* trailing comma ok */
+}`)
+
+	got, err := LoadFile[testConfig](path)
+	if err != nil {
+		t.Fatalf("LoadFile returned error: %v", err)
+	}
+
+	assertConfig(t, got, testConfig{
+		Name:    "example",
+		Port:    ptr(8080),
+		Enabled: ptr(true),
+		Tags:    []string{"api", "worker"},
+	})
+}
+
+func TestLoadFileYAML(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+	}{
+		{name: "yaml extension", filename: "config.yaml"},
+		{name: "yml extension", filename: "config.yml"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tt.filename)
+			writeFile(t, path, `
+name: example
+port: 8080
+enabled: true
+tags:
+  - api
+  - worker
+`)
+
+			got, err := LoadFile[testConfig](path)
+			if err != nil {
+				t.Fatalf("LoadFile returned error: %v", err)
+			}
+
+			assertConfig(t, got, testConfig{
+				Name:    "example",
+				Port:    ptr(8080),
+				Enabled: ptr(true),
+				Tags:    []string{"api", "worker"},
+			})
+		})
+	}
+}
+
+func TestLoadFileINI(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.ini")
+	writeFile(t, path, `
+name = example
+port = 8080
+enabled = true
+tags = api, worker
+`)
+
+	got, err := LoadFile[testConfig](path)
+	if err != nil {
+		t.Fatalf("LoadFile returned error: %v", err)
+	}
+
+	assertConfig(t, got, testConfig{
+		Name:    "example",
+		Port:    ptr(8080),
+		Enabled: ptr(true),
+		Tags:    []string{"api", "worker"},
+	})
+}
+
+func TestValidateFile(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		data     string
+	}{
+		{name: "valid TOML", filename: "config.toml", data: `name = "ok"`},
+		{name: "valid JSON", filename: "config.json", data: `{"name":"ok"}`},
+		{name: "valid JSONC", filename: "config.jsonc", data: `{"name":"ok", /* comment */}`},
+		{name: "valid YAML", filename: "config.yaml", data: "name: ok\n"},
+		{name: "valid INI", filename: "config.ini", data: "name = ok\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tt.filename)
+			writeFile(t, path, tt.data)
+
+			if err := ValidateFile(path); err != nil {
+				t.Fatalf("ValidateFile returned error: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateFileRejectsInvalidSyntax(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		data     string
+	}{
+		{name: "invalid TOML", filename: "config.toml", data: "name ="},
+		{name: "invalid JSON", filename: "config.json", data: `{"name":`},
+		{name: "invalid JSONC", filename: "config.jsonc", data: `{"name": // broken`},
+		{name: "invalid YAML", filename: "config.yaml", data: "name: [\n"},
+		{name: "invalid INI", filename: "config.ini", data: "[unclosed\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tt.filename)
+			writeFile(t, path, tt.data)
+
+			err := ValidateFile(path)
+			if err == nil {
+				t.Fatal("ValidateFile returned nil error")
+			}
+			if !strings.Contains(err.Error(), `validate "`+path+`"`) {
+				t.Fatalf("error = %q, want validate source", err)
+			}
+		})
+	}
+}
+
+func TestWrongFormatContentFailsDecode(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		data     string
+	}{
+		{
+			name:     "JSON content in TOML file",
+			filename: "config.toml",
+			data:     `{"name":"example"}`,
+		},
+		{
+			name:     "TOML content in JSON file",
+			filename: "config.json",
+			data:     `name = "example"`,
+		},
+		{
+			name:     "TOML content in JSONC file",
+			filename: "config.jsonc",
+			data:     `name = "example"`,
+		},
+		{
+			name:     "TOML content in YAML file",
+			filename: "config.yaml",
+			data:     `name = "example"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tt.filename)
+			writeFile(t, path, tt.data)
+
+			_, err := LoadFile[testConfig](path)
+			if err == nil {
+				t.Fatal("LoadFile returned nil error")
+			}
+			if !strings.Contains(err.Error(), `decode "`+path+`"`) {
+				t.Fatalf("error = %q, want decode source", err)
+			}
 		})
 	}
 }
@@ -298,16 +500,6 @@ func TestUnsupportedFormatsFailDecode(t *testing.T) {
 		filename string
 		data     string
 	}{
-		{
-			name:     "JSON",
-			filename: "config.json",
-			data:     `{"name":"example"}`,
-		},
-		{
-			name:     "YAML",
-			filename: "config.yaml",
-			data:     `name: example`,
-		},
 		{
 			name:     "env",
 			filename: ".env",
@@ -332,10 +524,114 @@ func TestUnsupportedFormatsFailDecode(t *testing.T) {
 			if !strings.Contains(err.Error(), `decode "`+path+`"`) {
 				t.Fatalf("error = %q, want decode source", err)
 			}
-			if !strings.Contains(err.Error(), "unsupported config format") {
-				t.Fatalf("error = %q, want unsupported format", err)
+			if !errors.Is(err, ErrUnsupportedFormat) {
+				t.Fatalf("error = %q, want ErrUnsupportedFormat", err)
 			}
 		})
+	}
+}
+
+func TestLoadFileFS(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "config.toml"), `
+name = "embedded"
+port = 9090
+`)
+
+	got, err := LoadFileFS[testConfig](os.DirFS(dir), "config.toml")
+	if err != nil {
+		t.Fatalf("LoadFileFS returned error: %v", err)
+	}
+
+	assertConfig(t, got, testConfig{
+		Name: "embedded",
+		Port: ptr(9090),
+	})
+}
+
+func TestLoadOptionalFileFS(t *testing.T) {
+	dir := t.TempDir()
+
+	got, loaded, err := LoadOptionalFileFS[testConfig](os.DirFS(dir), "missing.toml")
+	if err != nil {
+		t.Fatalf("LoadOptionalFileFS returned error: %v", err)
+	}
+	if loaded {
+		t.Fatal("loaded = true, want false")
+	}
+	if got.Name != "" || got.Port != nil || got.Enabled != nil || len(got.Tags) != 0 {
+		t.Fatalf("got = %#v, want zero value", got)
+	}
+
+	writeFile(t, filepath.Join(dir, "config.json"), `{"name":"fs","port":7070}`)
+	got, loaded, err = LoadOptionalFileFS[testConfig](os.DirFS(dir), "config.json")
+	if err != nil {
+		t.Fatalf("LoadOptionalFileFS returned error: %v", err)
+	}
+	if !loaded {
+		t.Fatal("loaded = false, want true")
+	}
+	assertConfig(t, got, testConfig{
+		Name: "fs",
+		Port: ptr(7070),
+	})
+}
+
+func TestValidateFileFS(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "config.yaml"), "name: ok\n")
+
+	if err := ValidateFileFS(os.DirFS(dir), "config.yaml"); err != nil {
+		t.Fatalf("ValidateFileFS returned error: %v", err)
+	}
+}
+
+func TestValidateBytes(t *testing.T) {
+	if err := Validate([]byte(`{"name":"ok"}`), "config.json"); err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+}
+
+func TestExportedErrors(t *testing.T) {
+	t.Run("empty path", func(t *testing.T) {
+		_, err := LoadFile[testConfig]("")
+		if !errors.Is(err, ErrEmptyPath) {
+			t.Fatalf("error = %v, want ErrEmptyPath", err)
+		}
+	})
+
+	t.Run("unsupported format", func(t *testing.T) {
+		_, err := Decode[testConfig]([]byte(`name = "x"`), "config.env")
+		if !errors.Is(err, ErrUnsupportedFormat) {
+			t.Fatalf("error = %v, want ErrUnsupportedFormat", err)
+		}
+	})
+
+	t.Run("validate unsupported format", func(t *testing.T) {
+		err := Validate([]byte("x"), "config")
+		if !errors.Is(err, ErrUnsupportedFormat) {
+			t.Fatalf("error = %v, want ErrUnsupportedFormat", err)
+		}
+	})
+}
+
+func TestLoadFileFSRejectsInvalidPath(t *testing.T) {
+	_, err := LoadFileFS[testConfig](os.DirFS(t.TempDir()), " ")
+	if !errors.Is(err, ErrEmptyPath) {
+		t.Fatalf("error = %v, want ErrEmptyPath", err)
+	}
+}
+
+func TestLoadFileFSPropagatesNotExist(t *testing.T) {
+	_, err := LoadFileFS[testConfig](os.DirFS(t.TempDir()), "missing.toml")
+	if err == nil {
+		t.Fatal("LoadFileFS returned nil error")
+	}
+	if !strings.Contains(err.Error(), `read "missing.toml"`) {
+		t.Fatalf("error = %q, want read path", err)
+	}
+	if !isNotExist(err) {
+		t.Fatalf("error = %v, want not-exist in error chain", err)
 	}
 }
 
