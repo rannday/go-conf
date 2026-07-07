@@ -4,9 +4,9 @@
 .vscode/
 *.swp
 
-# Go
-bin/
-dist/
+# Go build/test artifacts
+/bin/
+/dist/
 *.test
 *.out
 coverage.*
