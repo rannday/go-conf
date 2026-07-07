@@ -1,4 +1,4 @@
-module github.com/rannday/go-config
+module github.com/rannday/go-conf
 
 go 1.26.0
 

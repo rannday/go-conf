@@ -1,14 +1,12 @@
 # go-conf
 
-Tiny config loading helper for Go.
+`confx` only loads config files into Go structs.
 
-This package loads TOML, JSON, JSONC, YAML, and INI into caller-provided
-structs. Callers own defaults, validation, merge logic, and overrides. Format
-is selected by file extension: `.toml`, `.json`, `.jsonc`, `.yaml`, `.yml`,
-and `.ini`.
+It supports TOML, JSON, JSONC, YAML, YML, and INI. Format comes from file
+extension: `.toml`, `.json`, `.jsonc`, `.yaml`, `.yml`, and `.ini`.
 
-The module path is `github.com/rannday/go-conf`, but the package name is
-`confx`. Import it with an alias:
+Module path is `github.com/rannday/go-conf`. Package name stays `confx`, so
+import with alias:
 
 ```go
 import confx "github.com/rannday/go-conf"
@@ -26,26 +24,31 @@ go get github.com/rannday/go-conf@latest
 package main
 
 import (
-	"fmt"
-
 	confx "github.com/rannday/go-conf"
 )
 
 type AppConfig struct {
 	Name    string `toml:"name" json:"name" yaml:"name" ini:"name"`
-	Port    *int   `toml:"port" json:"port" yaml:"port" ini:"port"`
-	Enabled *bool  `toml:"enabled" json:"enabled" yaml:"enabled" ini:"enabled"`
+	Port    int    `toml:"port" json:"port" yaml:"port" ini:"port"`
+	Enabled bool   `toml:"enabled" json:"enabled" yaml:"enabled" ini:"enabled"`
 }
 
-func main() {
-	cfg, err := confx.Load[AppConfig]("config.toml")
-	if err != nil {
-		panic(err)
+func DefaultConfig() AppConfig {
+	return AppConfig{
+		Name:    "example",
+		Port:    8080,
+		Enabled: true,
+	}
+}
+
+func LoadConfig(path string) (AppConfig, error) {
+	cfg := DefaultConfig()
+
+	if err := confx.LoadInto(path, &cfg); err != nil {
+		return cfg, err
 	}
 
-	if cfg.Port != nil {
-		fmt.Println("port:", *cfg.Port)
-	}
+	return cfg, nil
 }
 ```
 
@@ -55,13 +58,15 @@ func main() {
 //go:embed config.toml
 var configFS embed.FS
 
-cfg, err := confx.LoadFS[AppConfig](configFS, "config.toml")
+cfg := DefaultConfig()
+err := confx.LoadFSInto(configFS, "config.toml", &cfg)
 ```
 
 ### Bytes without a real file
 
 ```go
-cfg, err := confx.Decode[AppConfig](data, "config.json")
+cfg := DefaultConfig()
+err := confx.DecodeInto(data, "config.json", &cfg)
 ```
 
 The `source` argument must include a supported extension so the decoder can be
@@ -73,6 +78,9 @@ selected. It is also included in decode errors.
 func Load[T any](path string) (T, error)
 func LoadFS[T any](fsys fs.FS, path string) (T, error)
 func Decode[T any](data []byte, source string) (T, error)
+func LoadInto(path string, dst any) error
+func LoadFSInto(fsys fs.FS, path string, dst any) error
+func DecodeInto(data []byte, source string, dst any) error
 ```
 
 ```go
@@ -83,7 +91,9 @@ var ErrUnsupportedFormat = errors.New("unsupported config format")
 Empty or whitespace-only paths are rejected with `ErrEmptyPath`. Unsupported
 or missing extensions return errors wrapping `ErrUnsupportedFormat`. Read
 errors include the path and preserve the underlying error. Decode errors
-include the source and preserve the parser error.
+include the source and preserve the parser error. `LoadInto`, `LoadFSInto`,
+and `DecodeInto` require a non-nil pointer destination and decode into the
+existing value without zeroing it first.
 
 ## Struct tags
 
@@ -99,8 +109,33 @@ Each decoder reads its own struct tag:
 If you load more than one format into the same struct, include the tags for
 every format you plan to use.
 
-Use pointer fields such as `*int` and `*bool` when you need to tell the
-difference between a field that was omitted and one set to a zero value.
+Put defaults in app code, not tags. Example:
+
+```go
+type AppConfig struct {
+	Name    string `toml:"name" json:"name" yaml:"name" ini:"name"`
+	Port    int    `toml:"port" json:"port" yaml:"port" ini:"port"`
+	Enabled bool   `toml:"enabled" json:"enabled" yaml:"enabled" ini:"enabled"`
+}
+
+func DefaultConfig() AppConfig {
+	return AppConfig{
+		Name:    "example",
+		Port:    8080,
+		Enabled: true,
+	}
+}
+
+func LoadConfig(path string) (AppConfig, error) {
+	cfg := DefaultConfig()
+
+	if err := confx.LoadInto(path, &cfg); err != nil {
+		return cfg, err
+	}
+
+	return cfg, nil
+}
+```
 
 ## Format notes
 
@@ -122,7 +157,7 @@ type Config struct {
 
 | Case | Behavior |
 |------|----------|
-| Missing file with `Load` / `LoadFS` | read error |
+| Missing file with `Load` / `LoadFS` / `LoadInto` / `LoadFSInto` | read error |
 | Empty path | `ErrEmptyPath` |
 | Unsupported extension | error wrapping `ErrUnsupportedFormat` |
 | Wrong syntax for extension | decode error from selected parser |

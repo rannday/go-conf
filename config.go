@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -31,54 +32,105 @@ type decoder func(data []byte, value any) error
 // Load reads a config file and decodes it into T.
 func Load[T any](path string) (T, error) {
 	var zero T
-	if err := validatePath(path); err != nil {
-		return zero, fmt.Errorf("read %q: %w", path, err)
+	var value T
+	if err := LoadInto(path, &value); err != nil {
+		return zero, err
 	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return zero, fmt.Errorf("read %q: %w", path, err)
-	}
-
-	return Decode[T](data, path)
+	return value, nil
 }
 
 // LoadFS reads a config file from fsys and decodes it into T.
 func LoadFS[T any](fsys fs.FS, path string) (T, error) {
 	var zero T
-	if err := validatePath(path); err != nil {
-		return zero, fmt.Errorf("read %q: %w", path, err)
+	var value T
+	if err := LoadFSInto(fsys, path, &value); err != nil {
+		return zero, err
 	}
-
-	data, err := fs.ReadFile(fsys, path)
-	if err != nil {
-		return zero, fmt.Errorf("read %q: %w", path, err)
-	}
-
-	return Decode[T](data, path)
+	return value, nil
 }
 
 // Decode decodes data into T. The source name must include a supported file
 // extension, which selects the decoder.
 func Decode[T any](data []byte, source string) (T, error) {
 	var value T
+	var zero T
+	if err := DecodeInto(data, source, &value); err != nil {
+		return zero, err
+	}
+	return value, nil
+}
+
+// LoadInto reads a config file and decodes it into dst.
+func LoadInto(path string, dst any) error {
+	if err := validateDestination(dst); err != nil {
+		return err
+	}
+	if err := validatePath(path); err != nil {
+		return fmt.Errorf("read %q: %w", path, err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %q: %w", path, err)
+	}
+
+	return DecodeInto(data, path, dst)
+}
+
+// LoadFSInto reads a config file from fsys and decodes it into dst.
+func LoadFSInto(fsys fs.FS, path string, dst any) error {
+	if err := validateDestination(dst); err != nil {
+		return err
+	}
+	if err := validatePath(path); err != nil {
+		return fmt.Errorf("read %q: %w", path, err)
+	}
+
+	data, err := fs.ReadFile(fsys, path)
+	if err != nil {
+		return fmt.Errorf("read %q: %w", path, err)
+	}
+
+	return DecodeInto(data, path, dst)
+}
+
+// DecodeInto decodes data into dst. The source name must include a supported
+// file extension, which selects the decoder.
+func DecodeInto(data []byte, source string, dst any) error {
+	if err := validateDestination(dst); err != nil {
+		return err
+	}
+
 	decoder, err := decoderForSource(source)
 	if err != nil {
-		var zero T
-		return zero, fmt.Errorf("decode %q: %w", source, err)
+		return fmt.Errorf("decode %q: %w", source, err)
 	}
 
-	if err := decoder(data, &value); err != nil {
-		var zero T
-		return zero, fmt.Errorf("decode %q: %w", source, err)
+	if err := decoder(data, dst); err != nil {
+		return fmt.Errorf("decode %q: %w", source, err)
 	}
 
-	return value, nil
+	return nil
 }
 
 func validatePath(path string) error {
 	if strings.TrimSpace(path) == "" {
 		return ErrEmptyPath
+	}
+	return nil
+}
+
+func validateDestination(dst any) error {
+	if dst == nil {
+		return fmt.Errorf("invalid destination: nil")
+	}
+
+	value := reflect.ValueOf(dst)
+	if value.Kind() != reflect.Pointer {
+		return fmt.Errorf("invalid destination: want non-nil pointer")
+	}
+	if value.IsNil() {
+		return fmt.Errorf("invalid destination: nil pointer")
 	}
 	return nil
 }

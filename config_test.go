@@ -16,6 +16,12 @@ type testConfig struct {
 	Tags    []string `toml:"tags" json:"tags" yaml:"tags" ini:"tags"`
 }
 
+type defaultConfig struct {
+	Name    string `toml:"name" json:"name" yaml:"name" ini:"name"`
+	Port    int    `toml:"port" json:"port" yaml:"port" ini:"port"`
+	Enabled bool   `toml:"enabled" json:"enabled" yaml:"enabled" ini:"enabled"`
+}
+
 func writeFile(t *testing.T, path, data string) {
 	t.Helper()
 
@@ -160,6 +166,257 @@ port = 9090
 		Name: "embedded",
 		Port: ptr(9090),
 	})
+}
+
+func TestLoadIntoPreservesDefaults(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		data     string
+	}{
+		{
+			name:     "TOML",
+			filename: "config.toml",
+			data:     `name = "file"`,
+		},
+		{
+			name:     "JSON",
+			filename: "config.json",
+			data:     `{"name":"file"}`,
+		},
+		{
+			name:     "JSONC",
+			filename: "config.jsonc",
+			data: `{
+  "name": "file",
+}`,
+		},
+		{
+			name:     "YAML",
+			filename: "config.yaml",
+			data:     "name: file\n",
+		},
+		{
+			name:     "YML",
+			filename: "config.yml",
+			data:     "name: file\n",
+		},
+		{
+			name:     "INI",
+			filename: "config.ini",
+			data:     "name = file\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tt.filename)
+			writeFile(t, path, tt.data)
+
+			cfg := defaultConfig{
+				Name:    "default",
+				Port:    8080,
+				Enabled: true,
+			}
+
+			if err := LoadInto(path, &cfg); err != nil {
+				t.Fatalf("LoadInto returned error: %v", err)
+			}
+
+			assertDefaultConfig(t, cfg, defaultConfig{
+				Name:    "file",
+				Port:    8080,
+				Enabled: true,
+			})
+		})
+	}
+}
+
+func TestLoadIntoOverridesDefaults(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		data     string
+		want     defaultConfig
+	}{
+		{
+			name:     "TOML",
+			filename: "config.toml",
+			data: `
+port = 9090
+enabled = false
+`,
+			want: defaultConfig{
+				Name:    "default",
+				Port:    9090,
+				Enabled: false,
+			},
+		},
+		{
+			name:     "JSON",
+			filename: "config.json",
+			data:     `{"port":9090,"enabled":false}`,
+			want: defaultConfig{
+				Name:    "default",
+				Port:    9090,
+				Enabled: false,
+			},
+		},
+		{
+			name:     "JSONC",
+			filename: "config.jsonc",
+			data: `{
+  "port": 9090,
+  "enabled": false,
+}`,
+			want: defaultConfig{
+				Name:    "default",
+				Port:    9090,
+				Enabled: false,
+			},
+		},
+		{
+			name:     "YAML",
+			filename: "config.yaml",
+			data: `
+port: 9090
+enabled: false
+`,
+			want: defaultConfig{
+				Name:    "default",
+				Port:    9090,
+				Enabled: false,
+			},
+		},
+		{
+			name:     "YML",
+			filename: "config.yml",
+			data: `
+port: 9090
+enabled: false
+`,
+			want: defaultConfig{
+				Name:    "default",
+				Port:    9090,
+				Enabled: false,
+			},
+		},
+		{
+			name:     "INI",
+			filename: "config.ini",
+			data: `
+port = 9090
+enabled = false
+`,
+			want: defaultConfig{
+				Name:    "default",
+				Port:    9090,
+				Enabled: false,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tt.filename)
+			writeFile(t, path, tt.data)
+
+			cfg := defaultConfig{
+				Name:    "default",
+				Port:    8080,
+				Enabled: true,
+			}
+
+			if err := LoadInto(path, &cfg); err != nil {
+				t.Fatalf("LoadInto returned error: %v", err)
+			}
+
+			assertDefaultConfig(t, cfg, tt.want)
+		})
+	}
+}
+
+func TestDecodeIntoAndLoadFSInto(t *testing.T) {
+	t.Run("DecodeInto", func(t *testing.T) {
+		cfg := defaultConfig{
+			Name:    "default",
+			Port:    8080,
+			Enabled: true,
+		}
+
+		if err := DecodeInto([]byte(`name = "decoded"`), "config.toml", &cfg); err != nil {
+			t.Fatalf("DecodeInto returned error: %v", err)
+		}
+
+		assertDefaultConfig(t, cfg, defaultConfig{
+			Name:    "decoded",
+			Port:    8080,
+			Enabled: true,
+		})
+	})
+
+	t.Run("LoadFSInto", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "config.toml"), `
+name = "embedded"
+`)
+
+		cfg := defaultConfig{
+			Name:    "default",
+			Port:    8080,
+			Enabled: true,
+		}
+
+		if err := LoadFSInto(os.DirFS(dir), "config.toml", &cfg); err != nil {
+			t.Fatalf("LoadFSInto returned error: %v", err)
+		}
+
+		assertDefaultConfig(t, cfg, defaultConfig{
+			Name:    "embedded",
+			Port:    8080,
+			Enabled: true,
+		})
+	})
+}
+
+func TestInvalidDestination(t *testing.T) {
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "nil",
+			call: func() error {
+				return DecodeInto([]byte(`name = "x"`), "config.toml", nil)
+			},
+		},
+		{
+			name: "non-pointer",
+			call: func() error {
+				cfg := defaultConfig{}
+				return DecodeInto([]byte(`name = "x"`), "config.toml", cfg)
+			},
+		},
+		{
+			name: "nil pointer",
+			call: func() error {
+				var cfg *defaultConfig
+				return DecodeInto([]byte(`name = "x"`), "config.toml", cfg)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.call()
+			if err == nil {
+				t.Fatal("DecodeInto returned nil error")
+			}
+			if !strings.Contains(err.Error(), "invalid destination") {
+				t.Fatalf("error = %q, want invalid destination", err)
+			}
+		})
+	}
 }
 
 func TestPointerFields(t *testing.T) {
@@ -312,6 +569,14 @@ func assertPointer[T comparable](t *testing.T, name string, got, want *T) {
 		t.Fatalf("%s = %v, want %v", name, got, want)
 	case *got != *want:
 		t.Fatalf("%s = %v, want %v", name, *got, *want)
+	}
+}
+
+func assertDefaultConfig(t *testing.T, got, want defaultConfig) {
+	t.Helper()
+
+	if got != want {
+		t.Fatalf("config = %#v, want %#v", got, want)
 	}
 }
 
