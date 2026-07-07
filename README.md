@@ -1,4 +1,4 @@
-# go-config
+# go-conf
 
 Tiny config loading helper for Go.
 
@@ -7,17 +7,17 @@ structs. Callers own defaults, validation, merge logic, and overrides. Format
 is selected by file extension: `.toml`, `.json`, `.jsonc`, `.yaml`, `.yml`,
 and `.ini`.
 
-The module path is `github.com/rannday/go-config`, but the package name is
+The module path is `github.com/rannday/go-conf`, but the package name is
 `confx`. Import it with an alias:
 
 ```go
-import confx "github.com/rannday/go-config"
+import confx "github.com/rannday/go-conf"
 ```
 
 ## Install
 
 ```sh
-go get github.com/rannday/go-config@latest
+go get github.com/rannday/go-conf@latest
 ```
 
 ## Usage
@@ -28,7 +28,7 @@ package main
 import (
 	"fmt"
 
-	confx "github.com/rannday/go-config"
+	confx "github.com/rannday/go-conf"
 )
 
 type AppConfig struct {
