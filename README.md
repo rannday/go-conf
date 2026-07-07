@@ -38,14 +38,9 @@ type AppConfig struct {
 }
 
 func main() {
-	cfg, loaded, err := confx.LoadOptionalFile[AppConfig]("config.toml")
+	cfg, err := confx.Load[AppConfig]("config.toml")
 	if err != nil {
 		panic(err)
-	}
-
-	if !loaded {
-		fmt.Println("no config file found")
-		return
 	}
 
 	if cfg.Port != nil {
@@ -60,32 +55,24 @@ func main() {
 //go:embed config.toml
 var configFS embed.FS
 
-cfg, err := confx.LoadFileFS[AppConfig](configFS, "config.toml")
+cfg, err := confx.LoadFS[AppConfig](configFS, "config.toml")
 ```
 
 ### Bytes without a real file
 
 ```go
 cfg, err := confx.Decode[AppConfig](data, "config.json")
-err = confx.Validate(data, "config.json")
 ```
 
 The `source` argument must include a supported extension so the decoder can be
-selected. It is also included in decode and validate errors.
+selected. It is also included in decode errors.
 
 ## API
 
 ```go
-func LoadFile[T any](path string) (T, error)
-func LoadFileFS[T any](fsys fs.FS, path string) (T, error)
-func LoadOptionalFile[T any](path string) (T, bool, error)
-func LoadOptionalFileFS[T any](fsys fs.FS, path string) (T, bool, error)
+func Load[T any](path string) (T, error)
+func LoadFS[T any](fsys fs.FS, path string) (T, error)
 func Decode[T any](data []byte, source string) (T, error)
-func ValidateFile(path string) error
-func ValidateFileFS(fsys fs.FS, path string) error
-func Validate(data []byte, source string) error
-func FormatForPath(path string) (Format, error)
-func SupportedFormats() []Format
 ```
 
 ```go
@@ -93,10 +80,10 @@ var ErrEmptyPath = errors.New("invalid path: empty")
 var ErrUnsupportedFormat = errors.New("unsupported config format")
 ```
 
-Missing optional files are not errors. Empty paths are rejected with
-`ErrEmptyPath`. Unsupported file extensions return errors wrapping
-`ErrUnsupportedFormat`. `ValidateFile` and `Validate` check syntax only and do
-not decode into caller-defined structs.
+Empty or whitespace-only paths are rejected with `ErrEmptyPath`. Unsupported
+or missing extensions return errors wrapping `ErrUnsupportedFormat`. Read
+errors include the path and preserve the underlying error. Decode errors
+include the source and preserve the parser error.
 
 ## Struct tags
 
@@ -135,21 +122,20 @@ type Config struct {
 
 | Case | Behavior |
 |------|----------|
-| Missing file with `LoadOptionalFile` | zero value, `loaded == false`, `nil` error |
-| Missing file with `LoadFile` | read error |
+| Missing file with `Load` / `LoadFS` | read error |
 | Empty path | `ErrEmptyPath` |
 | Unsupported extension | error wrapping `ErrUnsupportedFormat` |
-| Wrong syntax for extension | decode/validate error from the selected parser |
+| Wrong syntax for extension | decode error from selected parser |
 
 ### Empty files
 
-| Extension | `LoadFile` / `Decode` | `ValidateFile` / `Validate` |
-|-----------|----------------------|----------------------------|
-| `.toml` | zero struct, no error | no error |
-| `.json` | error | error |
-| `.jsonc` | error | error |
-| `.yaml`, `.yml` | zero struct, no error | no error |
-| `.ini` | zero struct, no error | no error |
+| Extension | Behavior |
+|-----------|----------|
+| `.toml` | zero struct, no error |
+| `.json` | error |
+| `.jsonc` | error |
+| `.yaml`, `.yml` | zero struct, no error |
+| `.ini` | zero struct, no error |
 
 An empty TOML, YAML, or INI file therefore loads as the zero value of your
 struct. An empty JSON or JSONC file is rejected.
